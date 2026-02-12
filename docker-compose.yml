@@ -33,7 +33,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: gitea-postgres
+    container_name: postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: gitea
