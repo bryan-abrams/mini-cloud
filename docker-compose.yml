@@ -1,0 +1,115 @@
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - gitea
+      - vault
+      - concourse-web
+
+  vault:
+    image: hashicorp/vault:latest
+    container_name: vault
+    restart: unless-stopped
+    user: "0"  # run entrypoint as root so it can chown /vault/data; inner process drops to vault user
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    volumes:
+      - vault_data:/vault/data
+      - ./vault/config.hcl:/vault/config/config.hcl:ro
+      - ./vault/entrypoint-wrapper.sh:/vault/entrypoint-wrapper.sh:ro
+    entrypoint: ["/vault/entrypoint-wrapper.sh"]
+    command: server
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: gitea-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gitea
+      POSTGRES_PASSWORD: gitea
+      POSTGRES_DB: gitea
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gitea -d gitea"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: postgres:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: gitea
+      GITEA__database__PASSWD: gitea
+      GITEA__server__DOMAIN: git.bry.an
+      GITEA__server__ROOT_URL: https://git.bry.an/
+    expose:
+      - "3000"
+    ports:
+      - "2222:22"
+    volumes:
+      - gitea_data:/data
+
+  concourse-web:
+    image: concourse/concourse:latest
+    container_name: concourse-web
+    restart: unless-stopped
+    command: web
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./concourse/keys/web:/concourse-keys:ro
+    environment:
+      CONCOURSE_EXTERNAL_URL: https://ci.bry.an
+      CONCOURSE_BIND_IP: "0.0.0.0"
+      CONCOURSE_POSTGRES_HOST: postgres
+      CONCOURSE_POSTGRES_USER: concourse
+      CONCOURSE_POSTGRES_PASSWORD: concourse
+      CONCOURSE_POSTGRES_DATABASE: concourse
+      CONCOURSE_BIND_PORT: "8080"
+      CONCOURSE_ADD_LOCAL_USER: admin:admin
+      CONCOURSE_MAIN_TEAM_LOCAL_USER: admin
+    expose:
+      - "8080"
+      - "2222"
+
+  concourse-worker:
+    image: concourse/concourse:latest
+    container_name: concourse-worker
+    restart: unless-stopped
+    privileged: true
+    command: worker
+    depends_on:
+      - concourse-web
+    volumes:
+      - ./concourse/keys/worker:/concourse-keys:ro
+    environment:
+      CONCOURSE_TSA_HOST: concourse-web:2222
+      CONCOURSE_GARDEN_DNS_PROXY_ENABLE: "true"
+    stop_signal: SIGUSR2
+
+volumes:
+  postgres_data:
+  gitea_data:
+  vault_data:
