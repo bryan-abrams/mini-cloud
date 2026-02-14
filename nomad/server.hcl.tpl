@@ -4,10 +4,13 @@ region     = "global"
 data_dir   = "/nomad/data"
 bind_addr  = "0.0.0.0"
 
-# Advertise RPC address that clients (e.g. Fedora VM) can reach. Use your Mac's IP
-# on the same network as the client; 192.168.64.1 is typical for UTM/shared network.
+# Advertise addresses for Consul health checks (same Docker network) and for
+# RPC so clients (e.g. Fedora VM) can reach the server. Use your Mac's IP on the
+# same network as the client; 192.168.64.1 is typical for UTM/shared network.
 advertise {
-  rpc = "192.168.64.1:4647"
+  http = "nomad-server:4646"
+  rpc  = "192.168.64.1:4647"
+  serf = "nomad-server:4648"
 }
 
 server {
@@ -17,6 +20,7 @@ server {
 
 # Optional: register with Consul for service discovery
 consul {
-  address = "consul:8500"
-  token   = "__CONSUL_TOKEN__"
+  address              = "consul:8500"
+  token                = "__CONSUL_TOKEN__"
+  checks_use_advertise  = true
 }

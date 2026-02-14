@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
     environment:
       CONSUL_HTTP_ADDR: "http://consul:8500"
-      CONSUL_HTTP_TOKEN: "${CONSUL_TOKEN}"
+      CONSUL_HTTP_TOKEN: "${CONSUL_HTTP_TOKEN}"
     volumes:
       - ./nginx/consul-template:/templates:ro
       - ./nginx/upstreams:/output
@@ -157,7 +157,7 @@ services:
     container_name: nomad-server
     restart: unless-stopped
     environment:
-      CONSUL_TOKEN: "${CONSUL_TOKEN}"
+      CONSUL_TOKEN: "${CONSUL_HTTP_TOKEN}"
     entrypoint: ["sh", "-c"]
     command:
       - |

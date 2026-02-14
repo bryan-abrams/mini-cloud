@@ -28,10 +28,11 @@ job "example" {
         address_mode = "host"
         tags         = ["web", "nginx"]
         check {
-          type     = "http"
-          path     = "/"
-          interval = "10s"
-          timeout  = "2s"
+          type          = "http"
+          path          = "/"
+          interval      = "15s"
+          timeout       = "15s"
+          address_mode  = "host"
         }
       }
     }
