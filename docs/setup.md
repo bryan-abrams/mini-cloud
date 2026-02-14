@@ -92,7 +92,7 @@ If you use non-standard TLDs (e.g. `.bry.an`), many browsers will treat them as 
 
 ### 2.3 Concourse keys (included)
 
-Concourse needs TSA and worker key pairs. This repo already includes generated keys under `concourse/keys/web/` and `concourse/keys/worker/`. No action needed unless you want to rotate them (then regenerate and replace those files).
+Concourse needs TSA and worker key pairs. This repo includes pre-generated keys under `concourse/keys/web/` and `concourse/keys/worker/` so you can run the stack immediately without extra steps. You can use these keys and the default users (e.g. Concourse admin, PgAdmin, Gitea/Concourse DB passwords in `docker-compose.yml`) as-is. The keys are committed for convenience only; if you prefer your own, run `concourse/generate-keys.sh` and replace the contents of `concourse/keys/web/` and `concourse/keys/worker/`.
 
 ### 2.4 External Nomad workers (optional)
 
