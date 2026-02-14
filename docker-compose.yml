@@ -20,6 +20,7 @@ services:
       - pgadmin
       - consul
       - nomad-server
+      - prometheus
 
   consul-template:
     image: hashicorp/consul-template:0.37.5
@@ -89,6 +90,7 @@ services:
       GITEA__database__PASSWD: gitea
       GITEA__server__DOMAIN: git.bry.an
       GITEA__server__ROOT_URL: https://git.bry.an/
+      GITEA__metrics__ENABLED: "true"
     expose:
       - "3000"
     ports:
@@ -116,9 +118,12 @@ services:
       CONCOURSE_BIND_PORT: "8080"
       CONCOURSE_ADD_LOCAL_USER: admin:admin
       CONCOURSE_MAIN_TEAM_LOCAL_USER: admin
+      CONCOURSE_PROMETHEUS_BIND_IP: "0.0.0.0"
+      CONCOURSE_PROMETHEUS_BIND_PORT: "9090"
     expose:
       - "8080"
       - "2222"
+      - "9090"
 
   concourse-worker:
     image: concourse/concourse:latest
@@ -173,6 +178,27 @@ services:
     depends_on:
       - consul
 
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_HTTP_TOKEN}"
+      METRICS_VAULT_TOKEN: "${METRICS_VAULT_TOKEN}"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        printf '%s' "$${CONSUL_HTTP_TOKEN}" > /etc/prometheus/consul-token 2>/dev/null || true
+        printf '%s' "$${METRICS_VAULT_TOKEN}" > /etc/prometheus/vault-token 2>/dev/null || true
+        exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/prometheus --web.enable-lifecycle --web.external-url=https://metrics.bry.an
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    expose:
+      - "9090"
+    depends_on:
+      - consul
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: pgadmin
@@ -196,3 +222,4 @@ volumes:
   vault_data:
   consul_data:
   nomad_server_data:
+  prometheus_data:

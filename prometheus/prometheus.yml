@@ -1,0 +1,50 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Consul server (uses CONSUL_HTTP_TOKEN from host)
+  - job_name: consul
+    bearer_token_file: /etc/prometheus/consul-token
+    static_configs:
+      - targets: ['consul:8500']
+    metrics_path: /v1/agent/metrics
+    params:
+      format: ['prometheus']
+
+  # Nomad server. Single protocol avoids 415 from Nomad when Prometheus sends a complex Accept header.
+  - job_name: nomad
+    scrape_protocols: [PrometheusText0.0.4]
+    static_configs:
+      - targets: ['nomad-server:4646']
+    metrics_path: /v1/metrics
+    params:
+      format: ['prometheus']
+
+  # Vault (uses METRICS_VAULT_TOKEN from host; token needs read on sys/metrics).
+  # Single protocol avoids 400 from Vault when Prometheus sends a complex Accept header.
+  - job_name: vault
+    bearer_token_file: /etc/prometheus/vault-token
+    scrape_protocols: [PrometheusText0.0.4]
+    static_configs:
+      - targets: ['vault:8200']
+    metrics_path: /v1/sys/metrics
+    params:
+      format: ['prometheus']
+
+  # Gitea (metrics enabled via GITEA__metrics__ENABLED=true)
+  - job_name: gitea
+    static_configs:
+      - targets: ['gitea:3000']
+    metrics_path: /metrics
+
+  # Concourse web (metrics on dedicated port 9090, not the web UI port 8080)
+  - job_name: concourse-web
+    static_configs:
+      - targets: ['concourse-web:9090']
+    metrics_path: /metrics

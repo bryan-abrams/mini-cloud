@@ -21,7 +21,7 @@ The stack is defined in `docker-compose.yml`. Services share a single Compose ne
 
 | Service | Role | Communicates with |
 |--------|------|--------------------|
-| **nginx** | TLS termination and reverse proxy. Serves all HTTPS hostnames (e.g. `git.bry.an`, `consul.bry.an`, `example.bry.an`) and proxies to backends. | **Backends:** gitea, vault, concourse-web, pgadmin, consul, nomad-server; and **dynamic upstreams** (e.g. `example_server` from `nginx/upstreams/`, populated by consul-template). Does not start until gitea, vault, concourse-web, pgadmin, consul, nomad-server are present. |
+| **nginx** | TLS termination and reverse proxy. Serves all HTTPS hostnames (e.g. `git.bry.an`, `consul.bry.an`, `example.bry.an`, `metrics.bry.an`) and proxies to backends. | **Backends:** gitea, vault, concourse-web, pgadmin, consul, nomad-server, **prometheus**; and **dynamic upstreams** (e.g. `example_server` from `nginx/upstreams/`, populated by consul-template). Does not start until gitea, vault, concourse-web, pgadmin, consul, nomad-server, prometheus are present. |
 | **consul-template** | Renders config from Consul (e.g. nginx upstreams for Nomad-discovered services). | **Consul** (HTTP API at `consul:8500`) to query service catalog; writes into **nginx/upstreams/** (e.g. `example-server.conf`). Starts only after **consul** is healthy (leader elected). |
 | **consul** | Service discovery and health. Single server, ACLs enabled; Vault can bootstrap and issue tokens. | **Vault** (Vault talks to Consul for ACL bootstrap/config). **Nomad server** and **consul-template** talk to Consul. External **Nomad clients** (workers) register with Consul over HTTPS (e.g. `consul.bry.an:443`). |
 | **vault** | Secrets and (optionally) Consul ACL token issuance. | **Consul** (for ACL integration). No other containers depend on Vault for startup. |
@@ -31,12 +31,13 @@ The stack is defined in `docker-compose.yml`. Services share a single Compose ne
 | **concourse-web** | Concourse CI API and UI. | **postgres**. Exposed via nginx as `ci.bry.an`. |
 | **concourse-worker** | Runs Concourse jobs. | **concourse-web** (TSA). |
 | **pgadmin** | DB UI. | **postgres**. Exposed via nginx (e.g. `pg.bry.an`). |
+| **prometheus** | Metrics collection and querying. Scrapes Prometheus-format metrics from Consul, Nomad, Vault, Gitea, and Concourse. | **Consul** (for ACL token when scraping Consul metrics). Exposed via nginx as `metrics.bry.an`. Uses bearer tokens (from env) for Consul and Vault scrape targets. |
 
 ### Dependency flow (startup)
 
 - **postgres** has a healthcheck; **gitea**, **concourse-web**, **pgadmin** depend on postgres (healthy).
 - **consul** has a healthcheck (leader elected); **consul-template** and **vault** depend on consul; **nomad-server** depends on consul.
-- **nginx** depends on gitea, vault, concourse-web, pgadmin, consul, nomad-server (no health condition; best effort).
+- **nginx** depends on gitea, vault, concourse-web, pgadmin, consul, nomad-server, prometheus (no health condition; best effort).
 
 ### Diagram: System topology
 
@@ -57,6 +58,7 @@ flowchart TB
             concourse_web["concourse-web<br>:8080"]
             concourse_worker["concourse-worker"]
             pgadmin["pgadmin<br>:80"]
+            prometheus["prometheus<br>:9090"]
         end
         subgraph lan["LAN<br>e.g. 192.168.64.0/24"]
             worker1["Nomad worker 1<br>(Fedora + Podman)"]
@@ -70,6 +72,7 @@ flowchart TB
     nginx -->|proxy| nomad_server
     nginx -->|proxy| pgadmin
     nginx -->|proxy| concourse_web
+    nginx -->|proxy| prometheus
     nginx -->|proxy / upstreams| worker1
     nginx -->|proxy / upstreams| worker2
 
@@ -96,6 +99,7 @@ flowchart LR
         concourse_web
         concourse_worker
         pgadmin
+        prometheus
     end
 
     nginx --> gitea
@@ -104,6 +108,7 @@ flowchart LR
     nginx --> consul
     nginx --> nomad_server
     nginx --> concourse_web
+    nginx --> prometheus
 
     consul_template -->|"HTTP API"| consul
     consul_template -.->|"writes"| nginx
@@ -133,6 +138,7 @@ flowchart TD
     consul -->|healthy| consul_template["consul-template"]
     consul -->|healthy| vault["vault"]
     consul -->|healthy| nomad_server["nomad-server"]
+    consul -->|healthy| prometheus["prometheus"]
 
     gitea --> nginx["nginx"]
     vault --> nginx
@@ -140,6 +146,7 @@ flowchart TD
     pgadmin --> nginx
     consul --> nginx
     nomad_server --> nginx
+    prometheus --> nginx
 
     concourse_web --> concourse_worker["concourse-worker"]
 ```
@@ -195,6 +202,7 @@ For services that are **inside** the Compose stack, nginx uses fixed upstreams (
 - `git.bry.an` → gitea
 - `ci.bry.an` → concourse-web
 - `pg.bry.an` → pgadmin
+- `metrics.bry.an` → prometheus (Prometheus UI and API)
 
 No Consul lookup is involved for these.
 
@@ -260,11 +268,45 @@ sequenceDiagram
 
 ---
 
-## Summary
+## 5. Monitoring and metrics (Prometheus)
 
-| Layer | What runs there |
-|-------|------------------|
-| **Host** | macOS, Colima (Docker), routing so containers can reach `192.168.64.x`. |
-| **Compose** | nginx, consul, consul-template, vault, nomad-server, postgres, gitea, concourse-web, concourse-worker, pgadmin. |
-| **External** | UTM VMs (Fedora + Podman), Nomad clients, workload tasks (e.g. example-server). |
-| **Consul → clients** | Consul catalog → consul-template → nginx upstreams → HTTPS hostnames used by API clients. |
+Prometheus runs inside the Compose stack and collects metrics from the other services so you can monitor the mini-cloud from a single place.
+
+### What Prometheus scrapes
+
+- **Prometheus** — self-metrics (localhost:9090).
+- **Consul** — `/v1/agent/metrics` (bearer token from `CONSUL_HTTP_TOKEN`).
+- **Nomad** — `/v1/metrics` on the Nomad server.
+- **Vault** — `/v1/sys/metrics` (bearer token from `METRICS_VAULT_TOKEN`; token must have read on `sys/metrics`).
+- **Gitea** — `/metrics` (metrics enabled via `GITEA__metrics__ENABLED=true`).
+- **Concourse web** — `/metrics` on the Concourse web service (port 9090).
+
+### Diagram: Prometheus scraping endpoints
+
+Prometheus (inside the Compose network) periodically scrapes each target; clients reach the Prometheus UI via nginx at `https://metrics.bry.an`.
+
+```mermaid
+flowchart LR
+    subgraph scrape["Prometheus scrape targets"]
+        consul["consul:8500<br>/v1/agent/metrics"]
+        nomad["nomad-server:4646<br>/v1/metrics"]
+        vault["vault:8200<br>/v1/sys/metrics"]
+        gitea["gitea:3000<br>/metrics"]
+        concourse["concourse-web:9090<br>/metrics"]
+    end
+
+    prometheus["prometheus:9090"]
+
+    prometheus -->|"scrape (bearer token)"| consul
+    prometheus -->|scrape| nomad
+    prometheus -->|"scrape (bearer token)"| vault
+    prometheus -->|scrape| gitea
+    prometheus -->|scrape| concourse
+```
+
+Configuration lives in `prometheus/prometheus.yml`. The Prometheus UI and API are exposed over HTTPS at **https://metrics.bry.an** (nginx proxies to `prometheus:9090`). Use the UI to run PromQL queries, view targets, and inspect scrape status.
+
+### Token requirements
+
+- **Consul:** Set `CONSUL_HTTP_TOKEN` in the environment so Prometheus can scrape Consul’s metrics endpoint (same token used by consul-template and Nomad).
+- **Vault:** Set `METRICS_VAULT_TOKEN` to a Vault token with read permission on `sys/metrics` so Prometheus can scrape Vault. Create a policy and token in Vault if ACLs restrict access.

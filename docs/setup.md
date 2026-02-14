@@ -32,13 +32,14 @@ Nginx expects certificate and key files in a local `ssl/` directory, mounted at 
 - `nomad.bry.an` (Nomad)
 - `vault.bry.an` (Vault)
 - `example.bry.an` (example Nomad service)
+- `metrics.bry.an` (Prometheus)
 
 Example — generate one cert per hostname in `ssl/` (filenames must match what nginx expects, e.g. `git.bry.an.pem` and `git.bry.an-key.pem`):
 
 ```bash
 cd /path/to/mini-cloud
 mkdir -p ssl
-domains=(git.bry.an ci.bry.an pg.bry.an consul.bry.an nomad.bry.an vault.bry.an example.bry.an)
+domains=(git.bry.an ci.bry.an pg.bry.an consul.bry.an nomad.bry.an vault.bry.an example.bry.an metrics.bry.an)
 for d in "${domains[@]}"; do
   mkcert -cert-file "ssl/${d}.pem" -key-file "ssl/${d}-key.pem" "$d"
 done
@@ -83,7 +84,7 @@ You can use any domain names you like. So that `https://git.bry.an`, `https://co
 On macOS/Linux, edit `/etc/hosts` (needs sudo). Add:
 
 ```
-127.0.0.1 git.bry.an ci.bry.an pg.bry.an consul.bry.an nomad.bry.an vault.bry.an example.bry.an
+127.0.0.1 git.bry.an ci.bry.an pg.bry.an consul.bry.an nomad.bry.an vault.bry.an example.bry.an metrics.bry.an
 ```
 
 If you run the stack on another machine and access it from your laptop, use that machine's IP instead of `127.0.0.1`.
@@ -153,21 +154,9 @@ export CONSUL_TOKEN="<token-from-above>"
 
 Set the token to `CONSUL_TOKEN` on your host; the Compose stack expects this variable to be set after you obtain a token from Vault. Use the same token value in the Consul UI (https://consul.bry.an → Log in) or in your Nomad client config (`consul.token`). The `consul-template` and `nomad/client.hcl` in this repo use a bootstrap token; for production you'd use tokens from Vault (e.g. `consul/creds/admin` or a custom role).
 
----
+### 2.7 Prometheus and metrics (optional)
 
-## 3. Quick checklist
+**Prometheus** is included in the stack for monitoring. It scrapes metrics from Consul, Nomad, Vault, Gitea, and Concourse. The UI is available at **https://metrics.bry.an** (add `metrics.bry.an` to your hostfile and TLS certs as in § 2.1 and § 2.2).
 
-Before running `docker compose up`:
-
-- [ ] Docker (or Colima) and Docker Compose installed and running.
-- [ ] mkcert installed and `mkcert -install` run.
-- [ ] `ssl/` directory created and certs (and keys) in place for all hostnames, with filenames matching nginx config (e.g. `git.bry.an.pem`, `git.bry.an-key.pem`).
-- [ ] Hostfile updated so `*.bry.an` resolves to the host (e.g. `127.0.0.1`).
-
-Then start the stack:
-
-```bash
-docker compose up -d
-```
-
-See **../README.md** for what the stack does and **architecture.md** for how the pieces fit together.
+- **Consul metrics:** Prometheus uses `CONSUL_HTTP_TOKEN` (same as the variable used by consul-template) to scrape Consul’s `/v1/agent/metrics` endpoint. No extra step if you already set the Consul token.
+- **Vault metrics:** To scrape Vault’s `/v1/sys/metrics` endpoint, set `METRICS_VAULT_TOKEN` in your environment to a Vault token that has read permission on `sys/metrics`. If you use the root token or a token with full access, it will work; otherwise create a Vault policy that allows `read` on `sys/metrics` and use a token with that policy. If `METRICS_VAULT_TOKEN` is unset, the Vault scrape target will fail in Prometheus (other targets will still work).

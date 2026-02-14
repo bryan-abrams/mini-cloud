@@ -11,3 +11,9 @@ listener "tcp" {
 
 # Public URL when accessed via nginx (so UI and redirects work)
 api_addr = "https://vault.bry.an"
+
+# Enable Prometheus metrics at /v1/sys/metrics?format=prometheus
+telemetry {
+  prometheus_retention_time = "30s"
+  disable_hostname         = true
+}

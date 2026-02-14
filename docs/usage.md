@@ -40,6 +40,10 @@ Git repos and package registry. On first visit you create the admin user and com
 
 PostgreSQL admin UI. Use the path **/pgadmin4/** (nginx redirects `https://pg.bry.an/` to that path). Log in with **admin@example.com** / **admin**. Add a server for the internal Postgres (host: `postgres`, or the host's Docker network name if you're not inside the stack) for Gitea/Concourse databases.
 
+### Prometheus — https://metrics.bry.an
+
+Monitoring and metrics. Prometheus scrapes Consul, Nomad, Vault, Gitea, and Concourse. Use the UI to run PromQL queries, view **Status → Targets** for scrape status, and explore metrics. No login by default. See **setup.md** § 2.7 for token setup (Consul and Vault metrics require the same tokens used elsewhere in the stack).
+
 ---
 
 ## When a token expires
