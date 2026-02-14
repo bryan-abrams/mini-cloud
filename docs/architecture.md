@@ -1,0 +1,270 @@
+# Architecture
+
+This document describes the mini-cloud topology: the host, the Docker composition, external Nomad workers, and how Consul-backed services are exposed to API clients (e.g. browsers and other apps).
+
+---
+
+## 1. Host and runtime
+- **Host:** macOS.
+- **Container runtime:** [Colima](https://colima.run), providing a Linux VM and Docker API compatibility on the Mac.
+- **Networking:** The Colima VM uses shared networking (e.g. `192.168.5.x`) with the host. To allow containers to reach external Nomad workers on the LAN (e.g. `192.168.64.x`), routing is configured so traffic from containers to `192.168.64.0/24` goes via the Mac; the Mac forwards and has a route back to the Docker bridge. This keeps the stack off bridged LAN mode while still allowing the edge proxy (nginx) to reach worker IPs.
+
+All services in the "Docker composition" section below run inside Colima on the host unless stated otherwise.
+
+---
+
+## 2. Docker composition
+
+The stack is defined in `docker-compose.yml`. Services share a single Compose network and resolve each other by service name (e.g. `consul`, `nomad-server`).
+
+### Service roles and communication
+
+| Service | Role | Communicates with |
+|--------|------|--------------------|
+| **nginx** | TLS termination and reverse proxy. Serves all HTTPS hostnames (e.g. `git.bry.an`, `consul.bry.an`, `example.bry.an`) and proxies to backends. | **Backends:** gitea, vault, concourse-web, pgadmin, consul, nomad-server; and **dynamic upstreams** (e.g. `example_server` from `nginx/upstreams/`, populated by consul-template). Does not start until gitea, vault, concourse-web, pgadmin, consul, nomad-server are present. |
+| **consul-template** | Renders config from Consul (e.g. nginx upstreams for Nomad-discovered services). | **Consul** (HTTP API at `consul:8500`) to query service catalog; writes into **nginx/upstreams/** (e.g. `example-server.conf`). Starts only after **consul** is healthy (leader elected). |
+| **consul** | Service discovery and health. Single server, ACLs enabled; Vault can bootstrap and issue tokens. | **Vault** (Vault talks to Consul for ACL bootstrap/config). **Nomad server** and **consul-template** talk to Consul. External **Nomad clients** (workers) register with Consul over HTTPS (e.g. `consul.bry.an:443`). |
+| **vault** | Secrets and (optionally) Consul ACL token issuance. | **Consul** (for ACL integration). No other containers depend on Vault for startup. |
+| **nomad-server** | Nomad control plane: scheduling and API. | **Consul** (for service registration and discovery). **External Nomad clients** connect to the host's RPC (e.g. `192.168.64.1:4647`). |
+| **postgres** | Shared SQL database. | **gitea**, **concourse-web**, **pgadmin** (each has its own DB/user). |
+| **gitea** | Git and (optionally) package registry. | **postgres**. Exposed via nginx as `git.bry.an`. |
+| **concourse-web** | Concourse CI API and UI. | **postgres**. Exposed via nginx as `ci.bry.an`. |
+| **concourse-worker** | Runs Concourse jobs. | **concourse-web** (TSA). |
+| **pgadmin** | DB UI. | **postgres**. Exposed via nginx (e.g. `pg.bry.an`). |
+
+### Dependency flow (startup)
+
+- **postgres** has a healthcheck; **gitea**, **concourse-web**, **pgadmin** depend on postgres (healthy).
+- **consul** has a healthcheck (leader elected); **consul-template** and **vault** depend on consul; **nomad-server** depends on consul.
+- **nginx** depends on gitea, vault, concourse-web, pgadmin, consul, nomad-server (no health condition; best effort).
+
+### Diagram: System topology
+
+High-level view of host, Colima, Compose services, and external workers.
+
+```mermaid
+%%{init: {'flowchart': {'rankSpacing': 50, 'nodeSpacing': 30}}}%%
+flowchart TB
+    subgraph host["Host: macOS"]
+        subgraph colima["Colima (Docker)"]
+            nginx["nginx<br>:80 / :443"]
+            consul["consul<br>:8500"]
+            consul_template["consul-template"]
+            vault["vault<br>:8200"]
+            nomad_server["nomad-server<br>:4646 / :4647"]
+            postgres["postgres<br>:5432"]
+            gitea["gitea<br>:3000"]
+            concourse_web["concourse-web<br>:8080"]
+            concourse_worker["concourse-worker"]
+            pgadmin["pgadmin<br>:80"]
+        end
+        subgraph lan["LAN<br>e.g. 192.168.64.0/24"]
+            worker1["Nomad worker 1<br>(Fedora + Podman)"]
+            worker2["Nomad worker 2<br>(Fedora + Podman)"]
+        end
+    end
+
+    nginx -->|proxy| gitea
+    nginx -->|proxy| consul
+    nginx -->|proxy| vault
+    nginx -->|proxy| nomad_server
+    nginx -->|proxy| pgadmin
+    nginx -->|proxy| concourse_web
+    nginx -->|proxy / upstreams| worker1
+    nginx -->|proxy / upstreams| worker2
+
+    nomad_server -->|RPC| worker1
+    nomad_server -->|RPC| worker2
+    worker1 -->|register services| consul
+    worker2 -->|register services| consul
+```
+
+### Diagram: Docker service communication
+
+Which Compose services talk to which (inside the Colima network).
+
+```mermaid
+flowchart LR
+    subgraph compose["Docker Compose network"]
+        nginx
+        consul_template
+        consul
+        vault
+        nomad_server
+        postgres
+        gitea
+        concourse_web
+        concourse_worker
+        pgadmin
+    end
+
+    nginx --> gitea
+    nginx --> vault
+    nginx --> pgadmin
+    nginx --> consul
+    nginx --> nomad_server
+    nginx --> concourse_web
+
+    consul_template -->|"HTTP API"| consul
+    consul_template -.->|"writes"| nginx
+
+    vault --> consul
+    nomad_server --> consul
+
+    gitea --> postgres
+    concourse_web --> postgres
+    pgadmin --> postgres
+    concourse_worker --> concourse_web
+```
+
+### Diagram: Startup dependencies
+
+Order and health conditions (postgres and consul healthy before their dependents).
+
+```mermaid
+flowchart TD
+    postgres["postgres"]
+    consul["consul"]
+
+    postgres -->|healthy| gitea["gitea"]
+    postgres -->|healthy| concourse_web["concourse-web"]
+    postgres -->|healthy| pgadmin["pgadmin"]
+
+    consul -->|healthy| consul_template["consul-template"]
+    consul -->|healthy| vault["vault"]
+    consul -->|healthy| nomad_server["nomad-server"]
+
+    gitea --> nginx["nginx"]
+    vault --> nginx
+    concourse_web --> nginx
+    pgadmin --> nginx
+    consul --> nginx
+    nomad_server --> nginx
+
+    concourse_web --> concourse_worker["concourse-worker"]
+```
+
+---
+
+## 3. External workers (UTM VMs, Nomad clients)
+
+Nomad **clients** (workers) do not run in Docker; they run on separate machines so they can use real hardware and full container runtimes.
+
+### Diagram: Host and workers
+
+```mermaid
+%%{init: {'flowchart': {'rankSpacing': 60, 'nodeSpacing': 40}}}%%
+flowchart LR
+    subgraph host["macOS host"]
+        colima["Colima<br>Docker Compose<br>consul, nomad-server<br>nginx, vault, ..."]
+    end
+
+    subgraph lan["Shared LAN"]
+        w1["Worker 1<br>Fedora + Podman<br>Nomad client"]
+        w2["Worker 2<br>Fedora + Podman<br>Nomad client"]
+    end
+
+    colima -->|"RPC :4647"| w1
+    colima -->|"RPC :4647"| w2
+    w1 -->|"Consul HTTPS<br>consul.bry.an:443"| colima
+    w2 -->|"Consul HTTPS<br>consul.bry.an:443"| colima
+    colima -->|"proxy to VM:port<br>(example-server)"| w1
+```
+
+- **Platform:** UTM (or similar) VMs on a shared network with the Mac (e.g. `192.168.64.1` = Mac, `192.168.64.15` / `192.168.64.16` = VMs).
+- **OS:** Fedora (or other Linux).
+- **Container runtime:** Podman (Docker-compatible); Nomad uses the Docker task driver with `unix:///run/podman/podman.sock`.
+- **Nomad:** Each VM runs `nomad agent -config=...` with a **client** config that points to the Nomad server on the host (e.g. `192.168.64.1:4647`) and to Consul (e.g. `consul.bry.an:443` with TLS). The client advertises its own HTTP/RPC addresses (e.g. `192.168.64.15:4646`) so Consul's "Nomad Client HTTP Check" can reach it.
+- **Config:** See `nomad/client.hcl`. Key points: `bind_addr`, `advertise` (http/rpc), `client.servers`, `consul.address` + `consul.ssl` + `consul.token`, and the Docker plugin for Podman.
+
+Workloads (e.g. the example nginx job) run as containers on these VMs. Nomad registers their **services** with Consul using the **host** address and port (`address_mode = "host"`) so that the edge proxy (nginx) on the Mac can reach them at VM IP + dynamic port.
+
+---
+
+## 4. Mapping Consul services for API clients
+
+API clients (browsers, scripts, other services) reach the mini-cloud over HTTPS via the host. They use **hostnames** (e.g. `example.bry.an`, `consul.bry.an`); the hostfile (or DNS) resolves those to the host (e.g. `127.0.0.1` or the Mac's LAN IP). Nginx then routes by `Host` and proxies to the right backend.
+
+### Static backends
+
+For services that are **inside** the Compose stack, nginx uses fixed upstreams (server blocks with `proxy_pass` to a service name and port):
+
+- `consul.bry.an` → `consul:8500`
+- `nomad.bry.an` → `nomad-server:4646`
+- `vault.bry.an` → vault (configured in `conf.d/`)
+- `git.bry.an` → gitea
+- `ci.bry.an` → concourse-web
+- `pg.bry.an` → pgadmin
+
+No Consul lookup is involved for these.
+
+### Consul-discovered backends (Nomad jobs)
+
+For services that run **on Nomad workers** and are registered in Consul (e.g. `example-server`), the flow is:
+
+1. **Consul** holds the catalog: service name, instance address (VM IP), port (host port), health.
+2. **consul-template** runs in a container, talks to Consul's HTTP API (with an ACL token), and renders a file (e.g. `nginx/upstreams/example-server.conf`) that nginx includes. The template uses Consul's `service "example-server"` (or similar) to list healthy instances and output `server <address>:<port>;` lines.
+3. **Nginx** includes `upstreams/*.conf` and reloads periodically (e.g. every 10s), so it picks up changes. A server block (e.g. `example.bry.an`) uses `proxy_pass http://example_server;`.
+4. **API clients** call `https://example.bry.an`. The host resolves that to the Mac; nginx proxies to the upstream built from Consul (e.g. `192.168.64.15:24095`). With host routing on the Mac (and Colima routing as described in section 1), the nginx container can reach the worker VM and the app responds.
+
+So "mapping Consul services for API clients" is:
+
+```mermaid
+flowchart LR
+    Consul["Consul<br>authoritative list of instances"]
+    CT["consul-template<br>generates nginx upstream config"]
+    Nginx["nginx<br>HTTPS and proxy"]
+    Clients["API clients<br>use hostnames and get the correct backend"]
+
+    Consul --> CT --> Nginx --> Clients
+
+    style Clients fill:#e1f5fe,stroke:#0277bd,stroke-width:2px
+```
+
+### Diagram: Consul to API clients (discovered services)
+
+Flow for a hostname backed by a Nomad service (e.g. `example.bry.an` → `example-server`).
+
+```mermaid
+sequenceDiagram
+    participant Client as API client (browser / app)
+    participant Hostfile as Hostfile / DNS
+    participant Nginx as nginx
+    participant CT as consul-template
+    participant Consul as Consul
+    participant Worker as Nomad worker (VM)
+
+    Note over Consul,Worker: Nomad registers task with Consul (VM IP + port)
+    Worker->>Consul: register example-server (192.168.64.15:24095)
+
+    CT->>Consul: GET /v1/health/service/example-server
+    Consul-->>CT: [ { Address, Port } ]
+    CT->>CT: render upstream file
+    Note over CT,Nginx: CT writes nginx/upstreams/example-server.conf
+
+    Client->>Hostfile: resolve example.bry.an
+    Hostfile-->>Client: 127.0.0.1 (host)
+    Client->>Nginx: HTTPS GET / (Host: example.bry.an)
+    Nginx->>Nginx: lookup upstream example_server
+    Nginx->>Worker: HTTP GET / (192.168.64.15:24095)
+    Worker-->>Nginx: 200 OK
+    Nginx-->>Client: 200 OK
+```
+
+### Adding a new Consul-backed hostname
+
+1. Define the service in a Nomad job with `address_mode = "host"` so Consul gets VM IP + port.
+2. Add a consul-template template that queries Consul (e.g. `service "my-service"`) and writes an upstream file under `nginx/upstreams/`.
+3. Add an nginx server block (e.g. in `conf.d/`) for the hostname that `proxy_pass`es to that upstream.
+4. Ensure the hostfile (or DNS) resolves the hostname to the host so clients hit nginx.
+
+---
+
+## Summary
+
+| Layer | What runs there |
+|-------|------------------|
+| **Host** | macOS, Colima (Docker), routing so containers can reach `192.168.64.x`. |
+| **Compose** | nginx, consul, consul-template, vault, nomad-server, postgres, gitea, concourse-web, concourse-worker, pgadmin. |
+| **External** | UTM VMs (Fedora + Podman), Nomad clients, workload tasks (e.g. example-server). |
+| **Consul → clients** | Consul catalog → consul-template → nginx upstreams → HTTPS hostnames used by API clients. |

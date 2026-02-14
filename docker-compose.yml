@@ -9,11 +9,34 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/stream.d:/etc/nginx/stream.d:ro
+      - ./nginx/upstreams:/etc/nginx/upstreams:ro
       - ./ssl:/etc/nginx/ssl:ro
+    command: ["sh", "-c", "nginx && while true; do sleep 10; nginx -s reload 2>/dev/null || true; done"]
     depends_on:
       - gitea
       - vault
       - concourse-web
+      - pgadmin
+      - consul
+      - nomad-server
+
+  consul-template:
+    image: hashicorp/consul-template:0.37.5
+    container_name: consul-template
+    restart: unless-stopped
+    environment:
+      CONSUL_HTTP_ADDR: "http://consul:8500"
+      CONSUL_HTTP_TOKEN: "${CONSUL_TOKEN}"
+    volumes:
+      - ./nginx/consul-template:/templates:ro
+      - ./nginx/upstreams:/output
+    command:
+      - "-template=/templates/example-server.upstream.tpl:/output/example-server.conf"
+      - "-consul-addr=consul:8500"
+    depends_on:
+      consul:
+        condition: service_healthy
 
   vault:
     image: hashicorp/vault:latest
@@ -28,8 +51,11 @@ services:
       - vault_data:/vault/data
       - ./vault/config.hcl:/vault/config/config.hcl:ro
       - ./vault/entrypoint-wrapper.sh:/vault/entrypoint-wrapper.sh:ro
+      - ./vault/setup-consul-acl.sh:/vault/scripts/setup-consul-acl.sh:ro
     entrypoint: ["/vault/entrypoint-wrapper.sh"]
     command: server
+    depends_on:
+      - consul
 
   postgres:
     image: postgres:16-alpine
@@ -109,7 +135,64 @@ services:
       CONCOURSE_GARDEN_DNS_PROXY_ENABLE: "true"
     stop_signal: SIGUSR2
 
+  consul:
+    image: hashicorp/consul:latest
+    container_name: consul
+    restart: unless-stopped
+    command: agent -server -ui -bootstrap-expect=1 -client=0.0.0.0 -config-file=/consul/config/config.hcl
+    volumes:
+      - consul_data:/consul/data
+      - ./consul/config.hcl:/consul/config/config.hcl:ro
+    expose:
+      - "8500"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8500/v1/status/leader || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  nomad-server:
+    image: hashicorp/nomad:latest
+    container_name: nomad-server
+    restart: unless-stopped
+    environment:
+      CONSUL_TOKEN: "${CONSUL_TOKEN}"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p /nomad/config && sed 's/__CONSUL_TOKEN__/'"$$CONSUL_TOKEN"'/g' /nomad/template/server.hcl.tpl > /nomad/config/server.hcl && exec nomad agent -config=/nomad/config/server.hcl
+    volumes:
+      - nomad_server_data:/nomad/data
+      - ./nomad/server.hcl.tpl:/nomad/template/server.hcl.tpl:ro
+    ports:
+      - "4647:4647"
+    expose:
+      - "4646"
+      - "4648"
+    depends_on:
+      - consul
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      SCRIPT_NAME: /pgadmin4
+      # Trust X-Forwarded-* from our single nginx proxy
+      PROXY_X_PROTO_COUNT: "1"
+      PROXY_X_HOST_COUNT: "1"
+      PROXY_X_PREFIX_COUNT: "1"
+    expose:
+      - "80"
+    depends_on:
+      - postgres
+
 volumes:
   postgres_data:
   gitea_data:
   vault_data:
+  consul_data:
+  nomad_server_data:
