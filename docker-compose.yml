@@ -21,6 +21,7 @@ services:
       - consul
       - nomad-server
       - prometheus
+      - grafana
 
   consul-template:
     image: hashicorp/consul-template:0.37.5
@@ -199,6 +200,23 @@ services:
     depends_on:
       - consul
 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    environment:
+      GF_SERVER_ROOT_URL: https://dash.bry.an
+      GF_SERVER_DOMAIN: dash.bry.an
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    expose:
+      - "3000"
+    depends_on:
+      - prometheus
+
   pgadmin:
     image: dpage/pgadmin4:latest
     container_name: pgadmin
@@ -223,3 +241,4 @@ volumes:
   consul_data:
   nomad_server_data:
   prometheus_data:
+  grafana_data:

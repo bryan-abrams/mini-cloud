@@ -10,7 +10,7 @@ This stack was built on a macOS host, but any macOS or Linux host with a contain
 |----------|--------------|
 | [Architecture](docs/architecture.md) | Topology, service roles, Consul → nginx flow, and diagrams. |
 | [Setup](docs/setup.md) | Prerequisites, certs, hostfile, and bootstrapping the stack. |
-| [Usage](docs/usage.md) | Portals, URLs, and day-to-day use (including the Prometheus UI at `metrics.bry.an`). |
+| [Usage](docs/usage.md) | Portals, URLs, and day-to-day use (including Prometheus at `metrics.bry.an` and Grafana at `dash.bry.an`). |
 | [Deploy example](docs/deploy-example.md) | Deploy the example nginx job and see how it maps to a domain. |
 | [Fedora UTM worker](docs/fedora-utm-worker.md) | Run a Nomad worker on a Fedora VM in UTM. |
 
@@ -42,7 +42,7 @@ Mini-cloud reproduces that picture on your laptop: you get a small “elastic co
 | **Secrets** | Central place to store and hand out API keys, certs, tokens. | **HashiCorp Vault** holds secrets and can issue tokens (e.g. for Consul ACLs). |
 | **Source control + CI/CD** | Code in Git, pipelines that build and deploy. | **Gitea** (internal Git + **package registry**) and **Concourse CI** (pipelines as YAML, visualized in a UI). Gitea’s registry lets you mimic having **package management as part of your services**—publish and consume internal packages (e.g. npm, NuGet, apt, brew) so builds and deployments pull from your own repo instead of the public internet. |
 | **Database + admin UI** | Managed DB and a way to browse it. | **PostgreSQL** plus **PgAdmin** for browsing and debugging. |
-| **Monitoring / metrics** | Central place to collect and query metrics (CPU, request rates, health). | **Prometheus** scrapes metrics from Consul, Nomad, Vault, Gitea, and Concourse; you access the UI at `https://metrics.bry.an` to run PromQL queries and inspect targets. |
+| **Monitoring / metrics** | Central place to collect and query metrics (CPU, request rates, health). | **Prometheus** scrapes metrics from Consul, Nomad, Vault, Gitea, and Concourse. **Grafana** at `https://dash.bry.an` uses Prometheus as a data source so you can build dashboards with multiple panels, auto-refresh, and smaller graphs. Raw PromQL and targets remain at `https://metrics.bry.an`. |
 
 So in practice: you define a small app (or use the example) as a Nomad job. Nomad runs it in a container on a worker. The job registers a service in Consul. Consul-template updates nginx’s config so that a hostname (e.g. `example.bry.an`) proxies to that service. That’s the same *pattern* as “elastic containers” plus a load balancer and service discovery in a big cloud—just scaled down to your machine and a couple of VMs.
 
@@ -61,6 +61,7 @@ So in practice: you define a small app (or use the example) as a Nomad job. Noma
 | **PostgreSQL** | [postgresql.org](https://www.postgresql.org/) | Shared SQL database used by Gitea, Concourse, and PgAdmin. |
 | **PgAdmin** | [pgadmin.org](https://www.pgadmin.org/) | Web UI to browse and query the PostgreSQL database for debugging. |
 | **Prometheus** | [prometheus.io](https://prometheus.io/) | Monitoring and metrics: scrapes Prometheus-format metrics from Consul, Nomad, Vault, Gitea, and Concourse so you can query and graph them. Exposed via nginx at `metrics.bry.an`. |
+| **Grafana** | [grafana.com](https://grafana.com/) | Dashboard UI for metrics: connects to Prometheus as a data source so you can build multi-panel dashboards with auto-refresh and resizable graphs. Exposed via nginx at `dash.bry.an`. |
 
 For more detail on how these pieces connect (including diagrams), see [Architecture](docs/architecture.md).
 

@@ -44,6 +44,10 @@ PostgreSQL admin UI. Use the path **/pgadmin4/** (nginx redirects `https://pg.br
 
 Monitoring and metrics. Prometheus scrapes Consul, Nomad, Vault, Gitea, and Concourse. Use the UI to run PromQL queries, view **Status → Targets** for scrape status, and explore metrics. No login by default. See **setup.md** § 2.7 for token setup (Consul and Vault metrics require the same tokens used elsewhere in the stack).
 
+### Grafana — https://dash.bry.an
+
+Dashboard UI for metrics. Grafana is pre-configured with Prometheus as the default data source, so you can create dashboards with multiple panels, set a refresh interval (e.g. 5s, 30s), and resize graphs. Log in with **admin** / **admin** (change on first use if you prefer). Create a new dashboard and add panels that query the Prometheus data source.
+
 ---
 
 ## When a token expires
