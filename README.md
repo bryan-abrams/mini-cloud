@@ -1,5 +1,9 @@
 # Mini-cloud
 
+<p align="center">
+  <img src="docs/images/myowncloud.png" alt="I'll make my own cloud" width="400" />
+</p>
+
 A fully isolated “cloud” environment that runs on your own machine. It gives you the same kinds of building blocks you see on platforms like AWS, Azure, or Google Cloud—containers, orchestration, service discovery, secrets, and CI/CD—so you can learn how they work without touching real cloud accounts or paying for hosted services.
 
 This stack was built on a macOS host, but any macOS or Linux host with a container engine that can run virtual machines (e.g. for worker nodes) should be able to run the same setup.
@@ -9,8 +13,9 @@ This stack was built on a macOS host, but any macOS or Linux host with a contain
 | Document | Description |
 |----------|--------------|
 | [Architecture](docs/architecture.md) | Topology, service roles, Consul → nginx flow, and diagrams. |
-| [Setup](docs/setup.md) | Prerequisites, certs, hostfile, and bootstrapping the stack. |
+| [Setup](docs/setup.md) | Prerequisites, certs, hostfile, and bootstrapping the stack (Vault unseal, Nomad ACL bootstrap, tokens). |
 | [Usage](docs/usage.md) | Portals, URLs, and day-to-day use (including Prometheus at `metrics.bry.an` and Grafana at `dash.bry.an`). |
+| [Cheatsheet](docs/cheatsheet.md) | Vault, Nomad, and Consul CLI and HTTP API quick reference. |
 | [Deploy example](docs/deploy-example.md) | Deploy the example nginx job and see how it maps to a domain. |
 | [Fedora UTM worker](docs/fedora-utm-worker.md) | Run a Nomad worker on a Fedora VM in UTM. |
 

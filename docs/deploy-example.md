@@ -16,7 +16,7 @@ Before running the job, you need a TLS certificate for this URL and a hosts entr
 
 ## Deploy the job
 
-With the stack (and workers) up and Nomad/Consul configured:
+With the stack (and workers) up, Nomad ACL bootstrapped, and a token set (see **setup.md** § 2.6 — use `export NOMAD_TOKEN="$(vault read -field=secret_id nomad/creds/job-submitter)"` or your management token for testing):
 
 ```bash
 nomad job run nomad/examples/nginx.hcl

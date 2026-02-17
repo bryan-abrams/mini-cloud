@@ -1,6 +1,6 @@
 # Setup
 
-Steps needed before the stack is usable: install required software, prepare certs and hostfile, start the stack, then bootstrap (e.g. unseal Vault and generate initial tokens) and complete any manual steps such as bringing up workers.
+Steps needed before the stack is usable: install required software, prepare certs and hostfile, start the stack, then bootstrap (unseal Vault, bootstrap Nomad ACLs, and generate initial tokens) and complete any manual steps such as bringing up workers.
 
 ---
 
@@ -34,13 +34,14 @@ Nginx expects certificate and key files in a local `ssl/` directory, mounted at 
 - `example.bry.an` (example Nomad service)
 - `metrics.bry.an` (Prometheus)
 - `dash.bry.an` (Grafana)
+- `logs.bry.an` (Loki API)
 
 Example — generate one cert per hostname in `ssl/` (filenames must match what nginx expects, e.g. `git.bry.an.pem` and `git.bry.an-key.pem`):
 
 ```bash
 cd /path/to/mini-cloud
 mkdir -p ssl
-domains=(git.bry.an ci.bry.an pg.bry.an consul.bry.an nomad.bry.an vault.bry.an example.bry.an metrics.bry.an dash.bry.an)
+domains=(git.bry.an ci.bry.an pg.bry.an consul.bry.an nomad.bry.an vault.bry.an example.bry.an metrics.bry.an dash.bry.an logs.bry.an)
 for d in "${domains[@]}"; do
   mkcert -cert-file "ssl/${d}.pem" -key-file "ssl/${d}-key.pem" "$d"
 done
@@ -54,6 +55,7 @@ Any machine that **connects as an HTTPS client** to the mini-cloud must trust th
 - **The host** where the stack runs — if you open https://git.bry.an (etc.) in a browser on that machine, run `mkcert -install` on the host so the system trust store includes the mkcert root.
 - **Any other machine you use to browse** the UIs (e.g. your laptop if the stack runs on a different box) — copy the root CA to that machine and configure your client to use it (see below).
 - **External Nomad workers** (e.g. Fedora VMs) — if they talk to Consul or other services over HTTPS (e.g. `consul.bry.an:443`), those clients need to trust the cert; copy the root CA to each worker and point the client at it (see below).
+- **Gitea container** — if you use Gitea Actions (e.g. artifact containers that call back to HTTPS URLs signed with mkcert), copy your mkcert root CA into `ssl/` (e.g. `cp "$(mkcert -CAROOT)/rootCA.pem" ssl/`), then recreate the Gitea container so it installs the cert at startup.
 
 The nginx container does **not** need the root CA; it only needs the certificate and key files in `ssl/`. The CA is for **clients** that validate the server's cert.
 
@@ -85,7 +87,7 @@ You can use any domain names you like. So that `https://git.bry.an`, `https://co
 On macOS/Linux, edit `/etc/hosts` (needs sudo). Add:
 
 ```
-127.0.0.1 git.bry.an ci.bry.an pg.bry.an consul.bry.an nomad.bry.an vault.bry.an example.bry.an metrics.bry.an dash.bry.an
+127.0.0.1 git.bry.an ci.bry.an pg.bry.an consul.bry.an nomad.bry.an vault.bry.an example.bry.an metrics.bry.an dash.bry.an logs.bry.an
 ```
 
 If you run the stack on another machine and access it from your laptop, use that machine's IP instead of `127.0.0.1`.
@@ -138,7 +140,67 @@ docker exec -e VAULT_TOKEN='<root-token>' vault sh /vault/scripts/setup-consul-a
 
 After that, you can get a token for the Consul UI with: `vault read consul/creds/admin`.
 
-### 2.6 Consul certificate and token
+### 2.6 Nomad ACL bootstrap (required)
+
+The Nomad server runs with ACLs enabled. You must bootstrap Nomad ACLs once, then configure Vault to issue Nomad tokens so that only authorized users can submit jobs.
+
+**Bootstrap Nomad ACL (one time only):**
+
+1. Ensure the stack is running and Nomad is up. Set the Nomad API address (use the URL that reaches your Nomad server, e.g. via nginx):
+   ```bash
+   export NOMAD_ADDR="https://nomad.bry.an"
+   ```
+2. Run the bootstrap command. You will get a **Secret ID** and an **Accessor ID**. Save the **Secret ID**; it is the management token and is shown only once.
+   ```bash
+   nomad acl bootstrap
+   ```
+3. Store the Secret ID in your environment for the next step and for later use:
+   ```bash
+   export NOMAD_TOKEN="<secret-id-from-above>"
+   ```
+
+**Create a Nomad policy (e.g. for job submitters):**
+
+Create a policy that allows submitting and managing jobs. Example — save as `nomad-job-submitter.hcl`:
+
+```hcl
+namespace "default" {
+  capabilities = ["submit-job", "read-job", "list-jobs", "dispatch-job", "read-logs"]
+}
+```
+
+Apply it (use the management token):
+
+```bash
+export NOMAD_ADDR="https://nomad.bry.an"
+export NOMAD_TOKEN="<your-management-secret-id>"
+nomad acl policy apply -description "Allow submitting jobs" job-submitter nomad-job-submitter.hcl
+```
+
+**Configure Vault to issue Nomad ACL tokens:**
+
+Set your Vault root (or admin) token and the Nomad management token, then run the setup script inside the Vault container. The script is bind-mounted at `/vault/scripts/setup-nomad-secrets.sh` (no image rebuild needed). If you get "No such file or directory", recreate the Vault container so it picks up the mount: `docker compose up -d vault`.
+
+```bash
+export VAULT_ADDR="https://vault.bry.an"
+export VAULT_TOKEN="<your-vault-root-token>"
+export NOMAD_TOKEN="<your-nomad-management-secret-id>"
+docker exec -e VAULT_TOKEN="$VAULT_TOKEN" -e NOMAD_TOKEN="$NOMAD_TOKEN" vault sh /vault/scripts/setup-nomad-secrets.sh
+```
+
+By default this creates a Vault role `job-submitter` that issues tokens with the Nomad policy `job-submitter`. To get a Nomad token for job submission: `vault read nomad/creds/job-submitter` and use the `secret_id` as `NOMAD_TOKEN` when running `nomad job run ...`. You can override the policy/role with `NOMAD_POLICY` and `NOMAD_ROLE` when running the script.
+
+**Allow Nomad to provision secrets to jobs:**  
+The Nomad server is configured with a Vault block so that jobs can request secrets (e.g. `vault { policy = ["my-policy"] }` in a task, or `template` with `vault` in the stanza). For this to work, Nomad needs a Vault token with permission to create tokens for the policies your jobs use. Set that token when starting the stack:
+
+```bash
+export NOMAD_VAULT_TOKEN="<vault-token-with-token-creation-capability>"
+docker compose up -d
+```
+
+You can use the Vault root token for development, or create a Vault policy that allows `auth/token/create` (or the specific role/policies your Nomad jobs need) and use a token with that policy. If `NOMAD_VAULT_TOKEN` is unset, Nomad still starts but jobs that request Vault secrets will fail to get tokens.
+
+### 2.7 Consul certificate and token
 
 **TLS certificate for Consul (https://consul.bry.an)**  
 The certificate for the Consul UI is the same one you generated in **2.1** — `consul.bry.an` is in the `domains` list. Nginx uses `ssl/consul.bry.an.pem` and `ssl/consul.bry.an-key.pem`. No extra step unless you use different domain names.
@@ -155,7 +217,7 @@ export CONSUL_TOKEN="<token-from-above>"
 
 Set the token to `CONSUL_TOKEN` on your host; the Compose stack expects this variable to be set after you obtain a token from Vault. Use the same token value in the Consul UI (https://consul.bry.an → Log in) or in your Nomad client config (`consul.token`). The `consul-template` and `nomad/client.hcl` in this repo use a bootstrap token; for production you'd use tokens from Vault (e.g. `consul/creds/admin` or a custom role).
 
-### 2.7 Prometheus and metrics (optional)
+### 2.8 Prometheus and metrics (optional)
 
 **Prometheus** is included in the stack for monitoring. It scrapes metrics from Consul, Nomad, Vault, Gitea, and Concourse. The UI is available at **https://metrics.bry.an** (add `metrics.bry.an` to your hostfile and TLS certs as in § 2.1 and § 2.2). **Grafana** at **https://dash.bry.an** uses Prometheus as its data source for dashboards; add `dash.bry.an` to the same hostfile and certs so you can open it in a browser.
 

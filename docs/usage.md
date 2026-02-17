@@ -1,6 +1,6 @@
 # Usage
 
-Once the stack is up and you've completed setup (TLS certs, hostfile, unsealing Vault, etc.), this is where to go and what URLs to use for each portal and service. All URLs use HTTPS. Ensure your hostfile resolves these hostnames to the host (e.g. `127.0.0.1`); see **setup.md** § 2.2.
+Once the stack is up and you've completed setup (TLS certs, hostfile, unsealing Vault, Nomad ACL bootstrap, etc.; see **setup.md**), this is where to go and what URLs to use for each portal and service. All URLs use HTTPS. Ensure your hostfile resolves these hostnames to the host (e.g. `127.0.0.1`); see **setup.md** § 2.2.
 
 ---
 
@@ -10,7 +10,7 @@ After the stack is running and (if you use them) workers are set up, you should 
 
 - **Nomad** — Client nodes (instances) listed and ready, waiting for jobs. Submit a job and you'll see allocations placed on those nodes.
 - **Consul** — The service catalog shows registered services, including Consul itself and the Nomad server. Nodes and health checks reflect the current state of the stack and any workers.
-- **Vault** — Once you've run the Consul ACL setup script (see **setup.md** § 2.5), you'll see a secrets engine for Consul (e.g. `consul/`) that can issue tokens. The Nomad server uses Consul for coordination and is registered there; Vault is the place you go to get Consul ACL tokens for the UI or for workers.
+- **Vault** — Once you've run the Consul ACL setup script (see **setup.md** § 2.5), you'll see a secrets engine for Consul (e.g. `consul/`) that can issue tokens. After you bootstrap Nomad ACLs and run the Nomad secrets setup (see **setup.md** § 2.6), Vault can also issue Nomad tokens (e.g. `nomad/creds/job-submitter`). The Nomad server uses Consul for coordination and is registered there; Vault is the place you go to get Consul ACL tokens for the UI or for workers.
 
 ---
 
@@ -22,7 +22,7 @@ Web UI and API. Vault must be **unsealed** before the UI or API will work (see *
 
 ### Nomad — https://nomad.bry.an
 
-Nomad UI and API for viewing jobs, allocations, and client nodes and for submitting jobs. No login by default in this setup. From the CLI: set `export NOMAD_ADDR="https://nomad.bry.an"` (and ensure TLS is trusted, e.g. mkcert CA on the host), then `nomad job run`, `nomad status`, etc.
+Nomad UI and API for viewing jobs, allocations, and client nodes and for submitting jobs. ACLs are enabled; you must use a token to submit jobs. From the CLI: set `export NOMAD_ADDR="https://nomad.bry.an"` and `export NOMAD_TOKEN="<token>"` (get a token from Vault: `vault read nomad/creds/job-submitter` — see **setup.md** § 2.6). Ensure TLS is trusted (e.g. mkcert CA on the host), then `nomad job run`, `nomad status`, etc.
 
 ### Consul — https://consul.bry.an
 

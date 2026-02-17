@@ -25,6 +25,18 @@ consul {
   checks_use_advertise  = true
 }
 
+acl {
+  enabled = true
+}
+
+# Vault integration: Nomad uses this to issue tokens for jobs that request
+# secrets (e.g. job task with vault { policy = ["my-policy"] } or template with vault).
+vault {
+  enabled = true
+  address = "http://vault:8200"
+  token   = "__VAULT_TOKEN__"
+}
+
 # Enable Prometheus metrics at /v1/metrics?format=prometheus
 telemetry {
   collection_interval        = "1s"

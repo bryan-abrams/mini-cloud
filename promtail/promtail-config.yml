@@ -1,0 +1,46 @@
+# Promtail: discover Docker containers and ship logs to Loki.
+# Requires Docker socket and container log directory mounted.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Container name (strip leading slash)
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: container
+      # Compose service name when available
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        regex: '(.+)'
+        target_label: service
+      # Fallback: use container name as service when compose label missing
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/(.*)'
+        target_label: service
+        replacement: $1
+    pipeline_stages:
+      # Docker JSON log format: {"log":"...","stream":"stdout|stderr","time":"..."}
+      - json:
+          expressions:
+            output: log
+            stream: stream
+            timestamp: time
+      - labels:
+          stream:
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+      - output:
+          source: output

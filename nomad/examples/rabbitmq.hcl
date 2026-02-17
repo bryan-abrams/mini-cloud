@@ -1,4 +1,4 @@
-job "example" {
+job "rabbitmq" {
   datacenters = ["dc1"]
   type        = "service"
 
@@ -9,37 +9,41 @@ job "example" {
     healthy_deadline = "5m"
   }
 
-  group "web" {
+  group "app" {
     count = 1
+
     network {
-      # Map dynamic port to container port 80 so nginx receives traffic
-      port "http" { to = 80 }
+      port "amqp"  { to = 5672 }
+      port "mgmt"  { to = 15672 }
     }
 
     task "server" {
       driver = "docker"
 
       config {
-        image = "nginx:alpine"
-        ports = ["http"]
+        image = "rabbitmq:3-management-alpine"
+        ports = ["amqp", "mgmt"]
       }
 
       resources {
-        cpu    = 100
-        memory = 64
+        cpu    = 200
+        memory = 256
       }
 
       service {
-        name         = "example-server"
-        port         = "http"
+        name         = "rabbitmq"
+        port         = "mgmt"
         address_mode = "host"
-        tags         = ["web", "nginx"]
+        tags         = ["management", "http"]
         check {
           type          = "http"
-          path          = "/"
+          path          = "/api/overview"
           interval      = "15s"
-          timeout       = "15s"
+          timeout       = "5s"
           address_mode  = "host"
+          header {
+            Authorization = ["Basic Z3Vlc3Q6Z3Vlc3Q="]
+          }
         }
       }
     }

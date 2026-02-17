@@ -22,6 +22,7 @@ services:
       - nomad-server
       - prometheus
       - grafana
+      - loki
 
   consul-template:
     image: hashicorp/consul-template:0.37.5
@@ -35,6 +36,8 @@ services:
       - ./nginx/upstreams:/output
     command:
       - "-template=/templates/example-server.upstream.tpl:/output/example-server.conf"
+      - "-template=/templates/www-server.upstream.tpl:/output/www-server.conf"
+      - "-template=/templates/rabbitmq-server.upstream.tpl:/output/rabbitmq-server.conf"
       - "-consul-addr=consul:8500"
     depends_on:
       consul:
@@ -54,6 +57,7 @@ services:
       - ./vault/config.hcl:/vault/config/config.hcl:ro
       - ./vault/entrypoint-wrapper.sh:/vault/entrypoint-wrapper.sh:ro
       - ./vault/setup-consul-acl.sh:/vault/scripts/setup-consul-acl.sh:ro
+      - ./vault/setup-nomad-secrets.sh:/vault/scripts/setup-nomad-secrets.sh:ro
     entrypoint: ["/vault/entrypoint-wrapper.sh"]
     command: server
     depends_on:
@@ -80,6 +84,8 @@ services:
     image: gitea/gitea:latest
     container_name: gitea
     restart: unless-stopped
+    extra_hosts:
+      - "git.bry.an:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,13 +97,18 @@ services:
       GITEA__database__PASSWD: gitea
       GITEA__server__DOMAIN: git.bry.an
       GITEA__server__ROOT_URL: https://git.bry.an/
+      GITEA__server__SSH_DOMAIN: git.bry.an
       GITEA__metrics__ENABLED: "true"
+    entrypoint: ["/usr/bin/entrypoint-wrapper.sh"]
+    volumes:
+      - gitea_data:/data
+      # mkcert root CA: put rootCA.pem in ssl/; installed at start
+      - ./ssl:/etc/mkcert-ca:ro
+      - ./gitea/entrypoint-wrapper.sh:/usr/bin/entrypoint-wrapper.sh:ro
     expose:
       - "3000"
     ports:
       - "2222:22"
-    volumes:
-      - gitea_data:/data
 
   concourse-web:
     image: concourse/concourse:latest
@@ -145,10 +156,16 @@ services:
     image: hashicorp/consul:latest
     container_name: consul
     restart: unless-stopped
-    command: agent -server -ui -bootstrap-expect=1 -client=0.0.0.0 -config-file=/consul/config/config.hcl
+    environment:
+      CONSUL_HTTP_TOKEN: "${CONSUL_HTTP_TOKEN}"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        sed 's|__CONSUL_AGENT_TOKEN__|'"$${CONSUL_HTTP_TOKEN}"'|g' /consul/config/config.hcl.tpl > /tmp/config.hcl
+        exec consul agent -server -ui -bootstrap-expect=1 -client=0.0.0.0 -config-file=/tmp/config.hcl
     volumes:
       - consul_data:/consul/data
-      - ./consul/config.hcl:/consul/config/config.hcl:ro
+      - ./consul/config.hcl.tpl:/consul/config/config.hcl.tpl:ro
     expose:
       - "8500"
     healthcheck:
@@ -164,10 +181,11 @@ services:
     restart: unless-stopped
     environment:
       CONSUL_TOKEN: "${CONSUL_HTTP_TOKEN}"
+      VAULT_TOKEN: "${NOMAD_VAULT_TOKEN}"
     entrypoint: ["sh", "-c"]
     command:
       - |
-        mkdir -p /nomad/config && sed 's/__CONSUL_TOKEN__/'"$$CONSUL_TOKEN"'/g' /nomad/template/server.hcl.tpl > /nomad/config/server.hcl && exec nomad agent -config=/nomad/config/server.hcl
+        mkdir -p /nomad/config && sed -e 's/__CONSUL_TOKEN__/'"$$CONSUL_TOKEN"'/g' -e 's/__VAULT_TOKEN__/'"$$VAULT_TOKEN"'/g' /nomad/template/server.hcl.tpl > /nomad/config/server.hcl && exec nomad agent -config=/nomad/config/server.hcl
     volumes:
       - nomad_server_data:/nomad/data
       - ./nomad/server.hcl.tpl:/nomad/template/server.hcl.tpl:ro
@@ -178,6 +196,7 @@ services:
       - "4648"
     depends_on:
       - consul
+      - vault
 
   prometheus:
     image: prom/prometheus:latest
@@ -216,6 +235,32 @@ services:
       - "3000"
     depends_on:
       - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: unless-stopped
+    user: "0"  # run as root so Loki can create /loki/data/rules and chunks (volume is root-owned)
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki_data:/loki/data
+    expose:
+      - "3100"
+      - "9096"
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: promtail
+    restart: unless-stopped
+    command: -config.file=/etc/promtail/promtail-config.yml
+    volumes:
+      - ./promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - loki
 
   pgadmin:
     image: dpage/pgadmin4:latest
@@ -242,3 +287,4 @@ volumes:
   nomad_server_data:
   prometheus_data:
   grafana_data:
+  loki_data:
