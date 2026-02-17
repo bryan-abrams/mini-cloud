@@ -66,7 +66,9 @@ So in practice: you define a small app (or use the example) as a Nomad job. Noma
 | **PostgreSQL** | [postgresql.org](https://www.postgresql.org/) | Shared SQL database used by Gitea, Concourse, and PgAdmin. |
 | **PgAdmin** | [pgadmin.org](https://www.pgadmin.org/) | Web UI to browse and query the PostgreSQL database for debugging. |
 | **Prometheus** | [prometheus.io](https://prometheus.io/) | Monitoring and metrics: scrapes Prometheus-format metrics from Consul, Nomad, Vault, Gitea, and Concourse so you can query and graph them. Exposed via nginx at `metrics.bry.an`. |
-| **Grafana** | [grafana.com](https://grafana.com/) | Dashboard UI for metrics: connects to Prometheus as a data source so you can build multi-panel dashboards with auto-refresh and resizable graphs. Exposed via nginx at `dash.bry.an`. |
+| **Grafana** | [grafana.com](https://grafana.com/) | Dashboard UI for metrics and logs: connects to Prometheus (and optionally Loki) as data sources so you can build dashboards with metrics and query log streams. Exposed via nginx at `dash.bry.an`. |
+| **Loki** | [grafana.com/oss/loki/](https://grafana.com/oss/loki/) | Log aggregation: stores log streams from the stack; query via Grafana (Loki data source) or the API at `logs.bry.an`. |
+| **Promtail** | [grafana.com/docs/loki/latest/send-data/promtail/](https://grafana.com/docs/loki/latest/send-data/promtail/) | Log collector: ships container logs from the host to Loki so you can search and graph them in Grafana. |
 
 For more detail on how these pieces connect (including diagrams), see [Architecture](docs/architecture.md).
 
